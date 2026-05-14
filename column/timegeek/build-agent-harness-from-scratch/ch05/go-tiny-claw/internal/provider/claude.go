@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/yourname/go-tiny-claw/internal/schema"
@@ -114,13 +112,11 @@ type ClaudeProvider struct {
 	model  string
 }
 
-// 创建智谱 Anthropic 兼容接口的 Provider，通过环境变量获取 API Key
-func NewZhipuClaudeProvider(model string) *ClaudeProvider {
-	apiKey := os.Getenv("ZHIPU_API_KEY")
+// 创建智谱 Anthropic 兼容接口的 Provider，apiKey 和 baseURL 由调用方传入
+func NewZhipuClaudeProvider(apiKey, baseURL, model string) *ClaudeProvider {
 	if apiKey == "" {
-		panic("请设置 ZHIPU_API_KEY 环境变量")
+		panic("请设置 ZHIPU_API_KEY 环境变量或在配置文件中指定 api_key")
 	}
-	baseURL := "https://open.bigmodel.cn/api/paas/v4/"
 	return &ClaudeProvider{
 		client: anthropic.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL)),
 		model:  model,

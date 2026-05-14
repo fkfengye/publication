@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
@@ -119,13 +117,11 @@ type OpenAIProvider struct {
 	model  string
 }
 
-// 创建智谱 OpenAI 兼容接口的 Provider，通过环境变量获取 API Key
-func NewZhipuOpenAIProvider(model string) *OpenAIProvider {
-	apiKey := os.Getenv("ZHIPU_API_KEY")
+// 创建智谱 OpenAI 兼容接口的 Provider，apiKey 和 baseURL 由调用方传入
+func NewZhipuOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 	if apiKey == "" {
-		panic("请设置 ZHIPU_API_KEY 环境变量")
+		panic("请设置 ZHIPU_API_KEY 环境变量或在配置文件中指定 api_key")
 	}
-	baseURL := "https://open.bigmodel.cn/api/paas/v4/"
 	return &OpenAIProvider{
 		client: openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL)),
 		model:  model,

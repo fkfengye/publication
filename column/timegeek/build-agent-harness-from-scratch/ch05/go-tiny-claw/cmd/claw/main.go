@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 
+	"github.com/yourname/go-tiny-claw/internal/config"
 	"github.com/yourname/go-tiny-claw/internal/engine"
 	"github.com/yourname/go-tiny-claw/internal/provider"
 	"github.com/yourname/go-tiny-claw/internal/tools"
@@ -53,16 +55,29 @@ Go 语法速查:
 
 // 程序入口
 func main() {
-	// 校验必要环境变量是否已设置
-	if os.Getenv("ZHIPU_API_KEY") == "" {
-		log.Fatal("请先导出 ZHIPU_API_KEY 环境变量")
+	// 解析 -config 命令行参数，默认为当前目录下的 config.yaml
+	configPath := flag.String("config", "config.yaml", "配置文件路径")
+	flag.Parse()
+
+	// 加载配置文件
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("加载配置文件失败: %v", err)
 	}
 
-	// 获取当前工作目录作为工作区路径
-	workDir, _ := os.Getwd()
+	// 校验 API Key 是否已设置
+	if cfg.APIKey == "" {
+		log.Fatal("请设置 ZHIPU_API_KEY 环境变量或在配置文件中指定 api_key")
+	}
 
-	// 创建智谱 OpenAI 兼容的 LLM Provider，指定模型名
-	llmProvider := provider.NewZhipuOpenAIProvider("glm-4.5-air")
+	// 确定工作区路径：配置文件优先，否则使用当前工作目录
+	workDir := cfg.WorkDir
+	if workDir == "" {
+		workDir, _ = os.Getwd()
+	}
+
+	// 创建智谱 OpenAI 兼容的 LLM Provider，apiKey、baseURL、model 从配置传入
+	llmProvider := provider.NewZhipuOpenAIProvider(cfg.APIKey, cfg.BaseURL, cfg.Model)
 
 	// 创建工具注册表并注册文件读取工具
 	registry := tools.NewRegistry()
@@ -71,12 +86,12 @@ func main() {
 	registry.Register(readFileTool)
 
 	// 初始化 Agent 引擎，传入 provider、工具注册表、工作区和 thinking 开关
-	eng := engine.NewAgentEngine(llmProvider, registry, workDir, false)
+	eng := engine.NewAgentEngine(llmProvider, registry, workDir, cfg.Thinking)
 
 	prompt := "请调用工具读取一下当前工作区目录下 hello.txt 文件的内容，并用一句话向我总结它说了什么。"
 
 	// 执行 Agent 任务
-	err := eng.Run(context.Background(), prompt)
+	err = eng.Run(context.Background(), prompt)
 	if err != nil {
 		log.Fatalf("引擎运行崩溃: %v", err)
 	}
