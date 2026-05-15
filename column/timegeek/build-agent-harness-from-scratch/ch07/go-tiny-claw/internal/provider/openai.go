@@ -86,7 +86,11 @@ func NewZhipuOpenAIProvider(model string) *OpenAIProvider {
 }
 
 // Generate 实现 LLMProvider 接口：将内部 Message 格式转为 OpenAI SDK 格式并发起调用
-func (p *OpenAIProvider) Generate(ctx context.Context, msgs []schema.Message, availableTools []schema.ToolDefinition) (*schema.Message, error) {
+func (p *OpenAIProvider) Generate(
+	ctx context.Context,
+	msgs []schema.Message,
+	availableTools []schema.ToolDefinition) (*schema.Message, error) {
+
 	var openaiMsgs []openai.ChatCompletionMessageParamUnion
 
 	// 将内部统一的 Message 切片转换为 OpenAI SDK 的消息格式
