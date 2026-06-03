@@ -74,35 +74,45 @@ func NewZhipuClaudeProvider(model string) *ClaudeProvider {
 	}
 }
 
-// Generate 将内部消息格式转换为 Anthropic 格式，调用模型并解析响应
+// Generate 是 Provider 层的"翻译官"：把内部中立消息格式翻成 Anthropic 协议，
+// 调用 API 后再把响应翻回内部 schema.Message。本方法分四步：
+//   1) msgs 转换    : schema.Message → anthropic.MessageParam（含 system 单独提取）
+//   2) 工具定义转换: schema.ToolDefinition → anthropic.ToolParam
+//   3) HTTP 调用   : p.client.Messages.New(ctx, params)
+//   4) 响应解析    : resp.Content blocks → schema.Message（text 拼到 Content，tool_use 拼到 ToolCalls）
 func (p *ClaudeProvider) Generate(ctx context.Context, msgs []schema.Message, availableTools []schema.ToolDefinition) (*schema.Message, error) {
+	// 1) 转换消息历史：内部 schema 格式 → Anthropic 协议格式
 	var anthropicMsgs []anthropic.MessageParam
-	var systemPrompt string
+	var systemPrompt string // Anthropic 把 system 单独放在 params.System 字段，不进 messages 数组
 
-	// 遍历内部消息格式，转换为 Anthropic 消息格式
 	for _, msg := range msgs {
 		switch msg.Role {
 		case schema.RoleSystem:
+			// system 消息不进循环数组，只缓存起来最后设到 params.System
 			systemPrompt = msg.Content
 		case schema.RoleUser:
+			// 区分"普通 user 文本"和"工具结果回调"——通过 ToolCallID 是否非空判断
 			if msg.ToolCallID != "" {
-				// 工具执行结果作为 ToolResultBlock 返回
+				// 工具结果：必须是 user role + ToolResultBlock，并通过 tool_use_id 关联到上一轮的 tool_use
 				anthropicMsgs = append(anthropicMsgs, anthropic.NewUserMessage(
 					anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false),
 				))
 			} else {
+				// 普通用户文本
 				anthropicMsgs = append(anthropicMsgs, anthropic.NewUserMessage(
 					anthropic.NewTextBlock(msg.Content),
 				))
 			}
 		case schema.RoleAssistant:
+			// assistant 消息可能同时含"文本回复"和"多个工具调用请求"——统一成 blocks 数组
 			var blocks []anthropic.ContentBlockParamUnion
 			if msg.Content != "" {
 				blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 			}
-			// 处理助手消息中的工具调用请求
+			// 把历史 tool_calls 翻译成 tool_use blocks
 			for _, tc := range msg.ToolCalls {
 				var inputMap map[string]interface{}
+				// Arguments 是 json.RawMessage，Anthropic SDK 要 map——做一次 JSON 往返
 				_ = json.Unmarshal(tc.Arguments, &inputMap)
 				blocks = append(blocks, anthropic.ContentBlockParamUnion{
 					OfToolUse: &anthropic.ToolUseBlockParam{
@@ -112,19 +122,21 @@ func (p *ClaudeProvider) Generate(ctx context.Context, msgs []schema.Message, av
 					},
 				})
 			}
+			// 没有任何内容（空文本+无工具调用）就不进消息列表，避免空消息触发 SDK 报错
 			if len(blocks) > 0 {
 				anthropicMsgs = append(anthropicMsgs, anthropic.NewAssistantMessage(blocks...))
 			}
 		}
 	}
 
-	// 将工具定义转换为 Anthropic Tools 格式
+	// 2) 转换工具定义：内部 schema.ToolDefinition → Anthropic 协议 ToolParam
 	var anthropicTools []anthropic.ToolUnionParam
 	for _, toolDef := range availableTools {
 		var properties map[string]any
 		var required []string
 
-		// 从 InputSchema 中提取 properties 和 required
+		// InputSchema 在 schema 包里是 interface{}，实际上每个工具填的是 map[string]interface{}
+		// 用类型断言拆出 properties 和 required 两部分，分别填入 Anthropic 的对应字段
 		if m, ok := toolDef.InputSchema.(map[string]interface{}); ok {
 			if p, ok := m["properties"].(map[string]interface{}); ok {
 				properties = p
@@ -145,31 +157,33 @@ func (p *ClaudeProvider) Generate(ctx context.Context, msgs []schema.Message, av
 		anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{OfTool: &tp})
 	}
 
+	// 3) 构造请求参数
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.model),
-		MaxTokens: 4096,
+		MaxTokens: 4096, // 智谱 GLM 也走这个字段，4096 是稳妥值
 		Messages:  anthropicMsgs,
 	}
 
-	// 设置系统提示
+	// 把缓存好的 system prompt 单独设到 params.System（Anthropic 协议规定）
 	if systemPrompt != "" {
 		params.System = []anthropic.TextBlockParam{
 			{Text: systemPrompt},
 		}
 	}
 
-	// 设置可用工具
+	// 挂载工具；空切片不发送，避免 SDK 触发"无工具但声明了 tools"的校验
 	if len(anthropicTools) > 0 {
 		params.Tools = anthropicTools
 	}
 
-	// 调用 Claude/智谱 API
+	// 4) 真正发 HTTP 请求到智谱 Zhipu（BaseURL 已在 NewZhipuClaudeProvider 中切好）
 	resp, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("Claude/Zhipu API 请求失败: %w", err)
 	}
 
-	// 解析响应消息
+	// 5) 解析响应：Anthropic 返回的 resp.Content 是 block 数组，
+	//    文本 block → 拼到 Content；tool_use block → 构造 ToolCall 塞进 ToolCalls
 	resultMsg := &schema.Message{
 		Role: schema.RoleAssistant,
 	}
@@ -177,8 +191,11 @@ func (p *ClaudeProvider) Generate(ctx context.Context, msgs []schema.Message, av
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
+			// 多段文本块按顺序拼接（Anthropic 极少返回多段，但要做容错）
 			resultMsg.Content += block.Text
 		case "tool_use":
+			// 工具调用：把 SDK 给的 Input (map) 再 marshal 回 json.RawMessage
+			// 这样下游 tools 包拿到的 Arguments 仍是原始 JSON 字节，可以延迟解析
 			argsBytes, _ := json.Marshal(block.Input)
 			resultMsg.ToolCalls = append(resultMsg.ToolCalls, schema.ToolCall{
 				ID:        block.ID,

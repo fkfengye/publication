@@ -75,24 +75,34 @@ func NewZhipuOpenAIProvider(model string) *OpenAIProvider {
 	}
 }
 
-// Generate 将内部消息格式转换为 OpenAI 格式，调用模型并解析响应
+// Generate 是 Provider 层的"翻译官"：把内部中立消息格式翻成 OpenAI Chat Completion 协议，
+// 调用 API 后再把响应翻回内部 schema.Message。本方法分四步：
+//   1) msgs 转换    : schema.Message → openai.ChatCompletionMessageParamUnion
+//                     （与 Anthropic 关键差异：system 也在 messages 数组里，不单独提取）
+//   2) 工具定义转换: schema.ToolDefinition → openai.ChatCompletionToolUnionParam
+//   3) HTTP 调用   : p.client.Chat.Completions.New(ctx, params)
+//   4) 响应解析    : resp.Choices[0].Message → schema.Message
 func (p *OpenAIProvider) Generate(ctx context.Context, msgs []schema.Message, availableTools []schema.ToolDefinition) (*schema.Message, error) {
+	// 1) 转换消息历史：内部 schema 格式 → OpenAI ChatCompletion 格式
 	var openaiMsgs []openai.ChatCompletionMessageParamUnion
 
-	// 遍历内部消息格式，转换为 OpenAI 消息格式
 	for _, msg := range msgs {
 		switch msg.Role {
 		case schema.RoleSystem:
+			// OpenAI 协议与 Anthropic 关键差异：system 是 messages 数组的一员
 			openaiMsgs = append(openaiMsgs, openai.SystemMessage(msg.Content))
 
 		case schema.RoleUser:
+			// 区分"普通 user 文本"和"工具结果回调"——通过 ToolCallID 是否非空判断
 			if msg.ToolCallID != "" {
-				// 工具执行结果作为 ToolMessage 返回
+				// 工具结果：必须用 ToolMessage 构造函数，自动带 role=tool + tool_call_id
 				openaiMsgs = append(openaiMsgs, openai.ToolMessage(msg.Content, msg.ToolCallID))
 			} else {
+				// 普通用户文本
 				openaiMsgs = append(openaiMsgs, openai.UserMessage(msg.Content))
 			}
 		case schema.RoleAssistant:
+			// assistant 消息可同时含"文本回复"和"多个工具调用请求"
 			astParam := openai.ChatCompletionAssistantMessageParam{}
 
 			if msg.Content != "" {
@@ -101,14 +111,15 @@ func (p *OpenAIProvider) Generate(ctx context.Context, msgs []schema.Message, av
 				}
 			}
 
-			// 处理助手消息中的工具调用请求
+			// 把历史 tool_calls 翻译成 OpenAI 的 function tool_calls
 			if len(msg.ToolCalls) > 0 {
 				var toolCalls []openai.ChatCompletionMessageToolCallUnionParam
 				for _, tc := range msg.ToolCalls {
+					// OpenAI 的 Function.Arguments 是 string（不是 json.RawMessage）——直接 string() 强转
 					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallUnionParam{
 						OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
 							ID:   tc.ID,
-							Type: "function",
+							Type: "function", // OpenAI 协议固定 "function" 字面量
 							Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
 								Name:      tc.Name,
 								Arguments: string(tc.Arguments),
@@ -125,14 +136,16 @@ func (p *OpenAIProvider) Generate(ctx context.Context, msgs []schema.Message, av
 		}
 	}
 
-	// 将工具定义转换为 OpenAI Tools 格式
+	// 2) 转换工具定义：内部 schema.ToolDefinition → OpenAI ChatCompletion Tool 格式
 	var openaiTools []openai.ChatCompletionToolUnionParam
 	for _, toolDef := range availableTools {
 		var params shared.FunctionParameters
+		// OpenAI SDK 用 shared.FunctionParameters 类型（实际是 map[string]any 的别名）
+		// 优先做类型断言：成功就直接转换；失败就 JSON 往返一次（兜底）
 		if m, ok := toolDef.InputSchema.(map[string]interface{}); ok {
 			params = shared.FunctionParameters(m)
 		} else {
-			// fallback：JSON 往返转换
+			// fallback：marshal 再 unmarshal 一次，相当于反射克隆
 			b, _ := json.Marshal(toolDef.InputSchema)
 			_ = json.Unmarshal(b, &params)
 		}
@@ -146,33 +159,37 @@ func (p *OpenAIProvider) Generate(ctx context.Context, msgs []schema.Message, av
 		))
 	}
 
+	// 3) 构造请求参数
 	params := openai.ChatCompletionNewParams{
 		Model:    p.model,
 		Messages: openaiMsgs,
 	}
+	// 挂载工具；空切片不发送，避免 SDK 触发校验
 	if len(openaiTools) > 0 {
 		params.Tools = openaiTools
 	}
 
-	// 调用 OpenAI/智谱 API
+	// 4) 真正发 HTTP 请求到智谱 Zhipu（BaseURL 已在 NewZhipuOpenAIProvider 中切好）
 	resp, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("OpenAI/Zhipu API 请求失败: %w", err)
 	}
+	// 防御：智谱偶尔可能返回空 Choices（如内容安全拦截），显式报错而不是 panic
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("API 返回了空的 Choices")
 	}
 
-	// 解析响应消息
+	// 5) 解析响应：取第 0 个 choice（流式场景下会有多个，非流式只关心第一个）
 	choice := resp.Choices[0].Message
 	resultMsg := &schema.Message{
 		Role:    schema.RoleAssistant,
-		Content: choice.Content,
+		Content: choice.Content, // OpenAI 单段文本，直接拿
 	}
 
-	// 提取工具调用请求
+	// 提取工具调用请求；OpenAI 的 tool_call.Type == "function" 是协议固定值
 	for _, tc := range choice.ToolCalls {
 		if tc.Type == "function" {
+			// Arguments 是 string，强转 []byte 得到 json.RawMessage 等价物
 			resultMsg.ToolCalls = append(resultMsg.ToolCalls, schema.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,

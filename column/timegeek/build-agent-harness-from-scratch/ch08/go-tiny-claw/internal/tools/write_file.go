@@ -92,24 +92,29 @@ type writeFileArgs struct {
 	Content string `json:"content"`
 }
 
-// Execute 将内容写入指定文件
+// Execute 将内容覆盖写入指定文件；自动递归创建父目录
 func (t *WriteFileTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	// 1) 反序列化模型传入的 JSON 参数（writeFileArgs{Path, Content}）
 	var input writeFileArgs
 	if err := json.Unmarshal(args, &input); err != nil {
 		return "", fmt.Errorf("参数解析失败: %w", err)
 	}
 
+	// 2) 相对路径 → 绝对路径，写入动作也被锁定在 t.workDir 子树内
 	fullPath := filepath.Join(t.workDir, input.Path)
 
-	// 确保父目录存在
+	// 3) 父目录可能不存在；MkdirAll 递归创建，0755 权限是 Go 推荐的目录权限
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 		return "", fmt.Errorf("创建父目录失败: %w", err)
 	}
 
+	// 4) 覆盖式写入：os.WriteFile 等价于 open(O_WRONLY|O_CREATE|O_TRUNC) + WriteAll + Close
+	//    已存在的文件会被清空再写入；权限 0644 是常规文件的常用配置
 	err := os.WriteFile(fullPath, []byte(input.Content), 0644)
 	if err != nil {
 		return "", fmt.Errorf("写入文件失败: %w", err)
 	}
 
+	// 5) 返回成功文案，让模型在下一轮 history 中能直接看到写入结果
 	return fmt.Sprintf("成功将内容写入到文件: %s", input.Path), nil
 }

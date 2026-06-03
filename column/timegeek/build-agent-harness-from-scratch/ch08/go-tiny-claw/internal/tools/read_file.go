@@ -93,27 +93,31 @@ type readFileArgs struct {
 	Path string `json:"path"`
 }
 
-// Execute 读取指定文件的内容并返回
+// Execute 读取指定文件的内容并返回；自动按 8000 字节截断避免撑爆上下文
 func (t *ReadFileTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	// 1) 反序列化模型传入的 JSON 参数（readFileArgs{Path}）
 	var input readFileArgs
 	if err := json.Unmarshal(args, &input); err != nil {
 		return "", fmt.Errorf("参数解析失败: %w", err)
 	}
 
+	// 2) 相对路径 → 绝对路径；所有文件访问都被锁定在 t.workDir 子树内
 	fullPath := filepath.Join(t.workDir, input.Path)
 
+	// 3) 只读方式打开文件（O_RDONLY）；不存在的文件直接报错，让模型知道路径有误
 	file, err := os.Open(fullPath)
 	if err != nil {
 		return "", fmt.Errorf("打开文件失败: %w", err)
 	}
-	defer file.Close()
+	defer file.Close() // 函数返回前保证关闭，释放文件描述符
 
+	// 4) 一次性把整个文件读入内存（适合代码这种"小到中等"文件）
 	content, err := io.ReadAll(file)
 	if err != nil {
 		return "", fmt.Errorf("读取文件内容失败: %w", err)
 	}
 
-	// 限制返回内容长度
+	// 5) 内容超过 8000 字节就截断，附上提示语提醒模型用 edit_file 分段读
 	const maxLen = 8000
 	if len(content) > maxLen {
 		truncatedMsg := fmt.Sprintf("%s\n\n...[由于内容过长，已被系统截断至前 %d 字节]...", string(content[:maxLen]), maxLen)
