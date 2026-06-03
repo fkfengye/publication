@@ -1,0 +1,17 @@
+# go-tiny-claw 配置文件
+# 可通过 -config 命令行参数指定配置文件路径，默认读取当前目录下的 config.yaml
+
+# LLM API 密钥（智谱 API Key），为空时回退读取环境变量 ZHIPU_API_KEY
+api_key: ""
+
+# LLM API 基础地址
+base_url: "https://open.bigmodel.cn/api/paas/v4/"
+
+# 模型名
+model: "glm-4.5-air"
+
+# 工作区路径，为空则使用当前工作目录
+work_dir: ""
+
+# 是否启用 thinking 模式
+thinking: false
