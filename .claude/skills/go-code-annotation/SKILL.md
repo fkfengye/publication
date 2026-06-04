@@ -1,6 +1,6 @@
 ---
 name: go-code-annotation
-description: Use when adding comments to Go source files, annotating Go code for beginners, or generating tutorial-style Go code with syntax explanations — applies a three-tier annotation system (file-level syntax reference, block-level functional description, logic-level explanation)
+description: Use when adding comments to Go source files, annotating Go code for beginners, generating tutorial-style Go code with syntax explanations, or creating teaching samples from existing Go code for blog posts, books, or tutorials
 ---
 
 # Go Code Annotation
@@ -17,7 +17,58 @@ description: Use when adding comments to Go source files, annotating Go code for
 
 **不适用场景：** 生产代码注释（应遵循项目自身注释规范）、非 Go 语言代码
 
-## 注释层级
+## Core Pattern
+
+将一个零注释的 Go 文件，转换为带三层注释的教学版本：
+
+```go
+// 之前：零注释（不利于初学者理解）
+package main
+
+import "fmt"
+
+func main() {
+    name := "World"
+    fmt.Printf("Hello, %s!\n", name)
+}
+```
+
+```go
+// 之后：三层注释完整版
+/*
+Go 语法速查:
+
+── 包声明 ──
+  package main
+    说明  声明为可独立运行的可执行程序入口包
+    用法  Go 要求可执行程序必须使用 main 包
+
+── 变量声明 ──
+  :=
+    说明  短变量声明，声明 + 赋值一步完成
+    用法  name := "World"，仅在函数内可用
+
+── 格式化输出 ──
+  fmt.Printf
+    说明  按指定格式输出到标准输出
+    用法  fmt.Printf("Hello, %s!\n", name)，%s 表示字符串占位符
+*/
+
+package main
+
+import "fmt"
+
+// 程序入口函数
+func main() {
+    // 准备问候语
+    name := "World"
+
+    // 打印问候
+    fmt.Printf("Hello, %s!\n", name)
+}
+```
+
+## 注释层级（Quick Reference）
 
 | 层级 | 内容 | 格式 | 位置 |
 |------|------|------|------|
