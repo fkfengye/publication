@@ -44,14 +44,16 @@ import (
 
 // 程序入口函数
 func main() {
-	if os.Getenv("ZHIPU_API_KEY") == "" {
-		log.Fatal("请先导出 ZHIPU_API_KEY 环境变量")
+	os.Setenv("MINIMAX_API_KEY", "sk-cp-M5k87O_0yiQa_hQjZk1_ddF6BIhAfNvjCo8y8VgwixWO2kUH0QU75GCqnG4MmzTBQjMooHuLbGLTs6LbRpTMWmoO1mjYeDRXsg8HNv3b70x4tlfYYq7_1QE")
+
+	if os.Getenv("MINIMAX_API_KEY") == "" {
+		log.Fatal("请先导出 MINIMAX_API_KEY 环境变量")
 	}
 
 	workDir, _ := os.Getwd()
 
-	// 创建 OpenAI 兼容的智谱 Provider（使用 Zhipu API）
-	llmProvider := provider.NewZhipuOpenAIProvider("glm-4.5-air")
+	// 创建模型对接provider
+	llmProvider := provider.NewMiniMaxClaudeProvider("MiniMax-M3")
 	registry := tools.NewRegistry()
 
 	// 注册文件读写和编辑工具

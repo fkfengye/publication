@@ -74,12 +74,25 @@ func NewZhipuClaudeProvider(model string) *ClaudeProvider {
 	}
 }
 
+// NewMiniMaxClaudeProvider 构造函数，创建智谱 API 的 Claude 兼容 Provider
+func NewMiniMaxClaudeProvider(model string) *ClaudeProvider {
+	apiKey := os.Getenv("MINIMAX_API_KEY")
+	if apiKey == "" {
+		panic("请设置 MINIMAX_API_KEY 环境变量")
+	}
+	baseURL := "https://api.minimaxi.com/anthropic"
+	return &ClaudeProvider{
+		client: anthropic.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL)),
+		model:  model,
+	}
+}
+
 // Generate 是 Provider 层的"翻译官"：把内部中立消息格式翻成 Anthropic 协议，
 // 调用 API 后再把响应翻回内部 schema.Message。本方法分四步：
-//   1) msgs 转换    : schema.Message → anthropic.MessageParam（含 system 单独提取）
-//   2) 工具定义转换: schema.ToolDefinition → anthropic.ToolParam
-//   3) HTTP 调用   : p.client.Messages.New(ctx, params)
-//   4) 响应解析    : resp.Content blocks → schema.Message（text 拼到 Content，tool_use 拼到 ToolCalls）
+//  1. msgs 转换    : schema.Message → anthropic.MessageParam（含 system 单独提取）
+//  2. 工具定义转换: schema.ToolDefinition → anthropic.ToolParam
+//  3. HTTP 调用   : p.client.Messages.New(ctx, params)
+//  4. 响应解析    : resp.Content blocks → schema.Message（text 拼到 Content，tool_use 拼到 ToolCalls）
 func (p *ClaudeProvider) Generate(ctx context.Context, msgs []schema.Message, availableTools []schema.ToolDefinition) (*schema.Message, error) {
 	// 1) 转换消息历史：内部 schema 格式 → Anthropic 协议格式
 	var anthropicMsgs []anthropic.MessageParam
